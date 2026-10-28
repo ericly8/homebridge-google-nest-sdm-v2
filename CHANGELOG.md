@@ -4,6 +4,19 @@ All notable changes to this fork are documented here. This project is a maintain
 fork of [`homebridge-google-nest-sdm`](https://github.com/potmat/homebridge-google-nest-sdm)
 by potmat; it follows the same ISC license.
 
+## Unreleased
+
+### Security
+- **Lockfile refreshed to current patched versions** (axios 1.21.0, node-forge 1.4.2, tar 7.5.22,
+  elliptic 6.6.1, qs 6.17.0, lodash 4.18.1 and others), clearing most Dependabot alerts. The
+  lockfile isn't shipped in the npm package, so existing installs were already resolving these.
+- **Dropped the unused `ip` / `@types/ip` dependencies.** Nothing in `src/` imports `ip`; werift
+  still pulls it in for its own non-`isPublic` helpers.
+- Still open, not reachable from this plugin (fixing needs major upgrades of werift, pubsub and
+  googleapis): `ip` `isPublic()` SSRF (werift calls only `isV4Format`/`toBuffer`/`toString`/
+  `isLoopback`), `elliptic` ECDSA signing (werift uses it only for ECDH; signing is Node crypto),
+  and `uuid` < 11.1.1 buffer bounds (all callers use `v4()` with no buffer).
+
 ## 2.0.7
 
 ### Fixed
