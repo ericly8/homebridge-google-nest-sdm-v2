@@ -1,7 +1,7 @@
 {
   "name": "homebridge-google-nest-sdm-v2",
   "displayName": "Google Nest SDM (v2)",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Homebridge plugin for Google Nest cameras, doorbells and thermostats via the Smart Device Management API. A maintained fork of homebridge-google-nest-sdm with refreshing camera snapshots, configurable ffmpeg/hardware transcoding, rate-limit hardening, and Homebridge v2 support.",
   "main": "dist/index.js",
   "scripts": {

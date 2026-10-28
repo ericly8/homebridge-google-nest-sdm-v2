@@ -36,6 +36,7 @@ const EcoMode = require("./EcoMode");
 const FanAccessory_1 = require("./FanAccessory");
 const UnknownDevice_1 = require("./sdm/UnknownDevice");
 const SnapshotRefresher = __importStar(require("./SnapshotRefresher"));
+const util_1 = require("./util");
 let IEcoMode;
 /**
  * HomebridgePlatform
@@ -48,6 +49,15 @@ class Platform {
         this.platformConfig = platformConfig;
         this.api = api;
         this.accessories = [];
+        // Device discovery retries until Google's device LIST succeeds (it 500s in bad spells),
+        // then latches: wiring an accessory twice throws in HAP (configureController) and would
+        // detach Pub/Sub events from the accessories, so discovery must never run again.
+        this.discovered = false;
+        this.discoveryInFlight = false;
+        this.shuttingDown = false;
+        this.discoveryAttempt = 0;
+        /** Wait before each retry after a failed discovery; the last value repeats. */
+        this.discoveryRetryDelaysMs = [30000, 60000, 120000, 300000, 600000];
         this.debugMode = process.argv.includes('-D') || process.argv.includes('--debug');
         this.EcoMode = EcoMode(api);
         IEcoMode = this.EcoMode;
@@ -60,6 +70,7 @@ class Platform {
             return;
         }
         this.smartDeviceManagement = new Api_1.SmartDeviceManagement(this.config, log);
+        this.api.on('shutdown', () => this.onShutdown());
         // When this event is fired it means Homebridge has restored all cached accessories from disk.
         // Dynamic Platform plugins should only register new accessories after this event was fired,
         // in order to ensure they weren't added to homebridge already. This event can also be used
@@ -79,7 +90,7 @@ class Platform {
                 log: this.log,
             });
             // run the method to discover / register your devices as accessories
-            this.discoverDevices();
+            this.discoverDevices().catch(error => this.log.error('Device discovery failed: ' + (0, util_1.summarizeError)(error)));
         });
         this.Characteristic = Object.defineProperty(this.api.hap.Characteristic, 'EcoMode', { value: this.EcoMode });
     }
@@ -98,11 +109,66 @@ class Platform {
      * must not be registered again to prevent "duplicate UUID" errors.
      */
     async discoverDevices() {
-        if (!this.smartDeviceManagement)
+        if (!this.smartDeviceManagement || this.discovered || this.discoveryInFlight || this.shuttingDown)
             return;
-        const devices = await this.smartDeviceManagement.list_devices();
-        if (!devices)
+        this.discoveryInFlight = true;
+        try {
+            const result = await this.smartDeviceManagement.list_devices();
+            if (this.shuttingDown)
+                return;
+            if (!result.ok) {
+                // Not subscribed is permanent (logged at startup) — retrying can't fix it.
+                if (result.reason === 'error')
+                    this.scheduleDiscoveryRetry(`device list failed${result.status ? ` (HTTP ${result.status})` : ''}`);
+                return;
+            }
+            // An empty list while accessories are cached is far more likely a bad response than
+            // every device being removed — don't let the stale cleanup wipe them all.
+            if (result.devices.length === 0 && this.accessories.length > 0) {
+                this.scheduleDiscoveryRetry(`Google returned no devices but ${this.accessories.length} are cached, so none were removed ` +
+                    '(if you removed them all on purpose, remove the cached accessories in the Homebridge UI)');
+                return;
+            }
+            // Latch BEFORE wiring, so a constructor that throws partway can't trigger a re-run
+            // that double-wires the accessories already set up.
+            this.discovered = true;
+            if (this.discoveryAttempt > 0)
+                this.log.info(`Device discovery succeeded on attempt ${this.discoveryAttempt + 1}.`);
+            try {
+                this.wireDevices(result.devices);
+            }
+            catch (error) {
+                this.log.error('Failed to set up Nest accessories: ' + (0, util_1.summarizeError)(error));
+            }
+        }
+        finally {
+            this.discoveryInFlight = false;
+        }
+    }
+    onShutdown() {
+        this.shuttingDown = true;
+        if (this.discoveryTimer) {
+            clearTimeout(this.discoveryTimer);
+            this.discoveryTimer = undefined;
+        }
+    }
+    scheduleDiscoveryRetry(why) {
+        var _a, _b;
+        if (this.shuttingDown)
             return;
+        const delays = this.discoveryRetryDelaysMs;
+        const delay = delays[Math.min(this.discoveryAttempt, delays.length - 1)];
+        this.discoveryAttempt++;
+        const wait = delay >= 60000 ? `${Math.round(delay / 60000)} min` : `${Math.round(delay / 1000)}s`;
+        this.log.warn(`Nest devices not set up yet: ${why}. Retry ${this.discoveryAttempt} in ${wait}.`);
+        this.discoveryTimer = setTimeout(() => {
+            this.discoveryTimer = undefined;
+            this.discoverDevices().catch(error => this.log.error('Device discovery failed: ' + (0, util_1.summarizeError)(error)));
+        }, delay);
+        (_b = (_a = this.discoveryTimer).unref) === null || _b === void 0 ? void 0 : _b.call(_a);
+    }
+    /** Register/restore an accessory for each discovered device, then prune stale ones. Runs once. */
+    wireDevices(devices) {
         const deviceInfos = devices
             .map(device => {
             const uuid = this.api.hap.uuid.generate(device.getName());
@@ -187,8 +253,8 @@ class Platform {
         }
         // Remove cached accessories that no longer map to a discovered device — e.g. a device was
         // removed from the account, or the Fan was disabled (showFan off). Only runs when discovery
-        // succeeded (guarded by the early return on a null device list), so a transient API failure
-        // won't wipe accessories.
+        // succeeded (a failed or suspiciously empty LIST never reaches wireDevices), so a transient
+        // API failure won't wipe accessories.
         const validUuids = new Set(deviceInfos.filter(d => d.category !== 1 /* this.api.hap.Categories.OTHER */).map(d => d.uuid));
         const stale = this.accessories.filter(a => !validUuids.has(a.UUID));
         if (stale.length > 0) {
