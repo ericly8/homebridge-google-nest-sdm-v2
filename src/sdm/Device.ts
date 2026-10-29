@@ -9,6 +9,7 @@ export abstract class Device {
     protected smartdevicemanagement: google.smartdevicemanagement_v1.Smartdevicemanagement;
     protected device: google.smartdevicemanagement_v1.Schema$GoogleHomeEnterpriseSdmV1Device;
     protected lastRefresh: number;
+    protected refreshPending: boolean;
     protected displayName: string|null|undefined;
     protected log: Logger;
 
@@ -21,6 +22,7 @@ export abstract class Device {
         this.device = device;
         this.queue = Queue.getInstance(log);
         this.lastRefresh = Date.now();
+        this.refreshPending = false;
         const parent = <google.smartdevicemanagement_v1.Schema$GoogleHomeEnterpriseSdmV1ParentRelation|undefined>_.find(device.parentRelations, relation => relation.displayName);
         this.displayName = parent?.displayName;
         this.log = log;
@@ -45,12 +47,20 @@ export abstract class Device {
 
     async refresh() {
         try {
-            const response = await this.smartdevicemanagement.enterprises.devices.get({name: this.getName()});
+            this.refreshPending = true;
+
+            const howLongAgo: number = Date.now() - this.lastRefresh;
+            this.log.info(`Last refresh for ${this.getDisplayName()} was ${howLongAgo/1000}s, refreshing.`)
+
+            const response = await this.queue.enqueue(() =>
+                { return this.smartdevicemanagement.enterprises.devices.get({name: this.getName()}); });
             this.log.debug(`Request for device info for ${this.getDisplayName()} had value ${JSON.stringify(response.data)}`);
             this.device = response.data;
             this.lastRefresh = Date.now();
         } catch (error: any) {
             this.log.error('Could not execute device GET request: ' + summarizeError(error), this.getDisplayName());
+        } finally {
+            this.refreshPending = false;
         }
     }
 
@@ -58,9 +68,8 @@ export abstract class Device {
         const howLongAgo: number = Date.now() - this.lastRefresh;
         //Events will update traits as necessary
         //no need to refresh more than once per day
-        if (howLongAgo > 1000 * 60 * 60 * 24) {
-            await this.refresh();
-            this.log.debug(`Last refresh for ${this.getDisplayName()} was ${howLongAgo/1000}s, refreshing.`)
+        if (howLongAgo > 1000 * 60 * 60 * 24 && !this.refreshPending) {
+            this.refresh();
         }
 
         const value = this.device?.traits ? this.device?.traits[name] : null;

@@ -72,10 +72,12 @@ export class Queue {
                 delay = Math.pow(2, ++command.numRetries) * 1000;
                 if (delay > this.maxDelayMs) {
                     command.reject(error);
-                    this.log.debug('Max delay exceeded. Rejecting command.');
+                    this.log.debug('Max delay exceeded. Rejecting command');
                 } else {
                     // Add some jitter
                     delay += Math.floor(Math.random() * 1000);
+
+                    this.log.info(`Throttling commands because of rate limit. Retrying in ${delay}ms`);
                 }
             } else {
                 // Fatal error: Reject the user's promise
