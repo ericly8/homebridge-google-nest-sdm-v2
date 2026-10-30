@@ -4,6 +4,50 @@ All notable changes to this fork are documented here. This project is a maintain
 fork of [`homebridge-google-nest-sdm`](https://github.com/potmat/homebridge-google-nest-sdm)
 by potmat; it follows the same ISC license.
 
+## Unreleased
+
+### Security
+- **Lockfile refreshed to current patched versions** (axios 1.21.0, node-forge 1.4.2, tar 7.5.22,
+  elliptic 6.6.1, qs 6.17.0, lodash 4.18.1 and others), clearing most Dependabot alerts. The
+  lockfile isn't shipped in the npm package, so existing installs were already resolving these.
+- **Dropped the unused `ip` / `@types/ip` dependencies.** Nothing in `src/` imports `ip`; werift
+  still pulls it in for its own non-`isPublic` helpers.
+- Still open, not reachable from this plugin (fixing needs major upgrades of werift, pubsub and
+  googleapis): `ip` `isPublic()` SSRF (werift calls only `isV4Format`/`toBuffer`/`toString`/
+  `isLoopback`), `elliptic` ECDSA signing (werift uses it only for ECDH; signing is Node crypto),
+  and `uuid` < 11.1.1 buffer bounds (all callers use `v4()` with no buffer).
+
+## 2.0.7
+
+### Fixed
+- **Cameras no longer stay dead after a restart during a Google API bad spell.** Device
+  discovery called Google's device LIST exactly once at startup; if it failed (Google's SDM
+  API intermittently returns `HTTP 500 INTERNAL` — on 2026-10-28 roughly 5 of 6 LIST calls),
+  every cached camera/doorbell stayed in HomeKit but was never wired up (no streams, no
+  motion/ring events) until the next Homebridge restart. Discovery now retries with backoff
+  (30s, 1m, 2m, 5m, then every 10m) until it succeeds, logging
+  `Nest devices not set up yet: device list failed (HTTP 500). Retry N in …`. This covers
+  `429` rate-limit responses too. A missing Pub/Sub setup (a permanent misconfiguration,
+  already logged at startup) does not retry.
+- **Discovery runs exactly once.** It latches before wiring accessories, so a second run —
+  which would throw in HAP (`configureController` twice) and detach Pub/Sub events from the
+  accessories — can't happen, even if wiring throws partway. A wiring error is now logged
+  instead of becoming an unhandled rejection.
+- **An empty device list can no longer wipe cached accessories.** If LIST returns no devices
+  while accessories are cached, the stale-accessory cleanup is skipped and discovery retries
+  (remove accessories manually in the Homebridge UI if that was intentional).
+
+### Changed
+- `list_devices()` returns a `{ok, devices} | {ok: false, reason, status}` result instead of
+  a possibly-stale device array, so a failure can never be mistaken for the full device list.
+- Smoke driver gained 13 checks: discovery retry-until-success, exactly-once, wiring-error
+  latch, empty-list guard (both ways), not-subscribed, shutdown (mid-LIST, pending retry,
+  after shutdown), capped retry delay, in-flight guard, and `list_devices` itself (an error —
+  including one after a success — never carries a device list; not-subscribed is reported).
+  Every guard was mutation-checked (each one, removed, fails a check).
+- Discovery's `didFinishLaunching` and retry-timer calls now `.catch` and log instead of
+  risking an unhandled rejection.
+
 ## 2.0.6
 
 ### Security

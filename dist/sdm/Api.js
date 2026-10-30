@@ -105,9 +105,10 @@ class SmartDeviceManagement {
         }
     }
     async list_devices() {
-        var _a;
+        var _a, _b;
+        // Permanent: the Pub/Sub setup failed in the constructor (already logged there).
         if (!this.subscribed)
-            return this.devices;
+            return { ok: false, reason: 'not-subscribed' };
         try {
             // Follow nextPageToken to fetch ALL devices. Without this we only ever see the first
             // page; combined with the stale-accessory cleanup in Platform.discoverDevices, any
@@ -138,11 +139,12 @@ class SmartDeviceManagement {
                 }
             })
                 .value();
+            return { ok: true, devices: this.devices };
         }
         catch (error) {
             this.log.error('Could not execute device LIST request: ' + (0, util_1.summarizeError)(error));
+            return { ok: false, reason: 'error', status: (_b = error === null || error === void 0 ? void 0 : error.response) === null || _b === void 0 ? void 0 : _b.status };
         }
-        return this.devices;
     }
 }
 exports.SmartDeviceManagement = SmartDeviceManagement;

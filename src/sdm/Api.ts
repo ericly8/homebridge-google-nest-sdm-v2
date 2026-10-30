@@ -12,6 +12,14 @@ import {UnknownDevice} from "./UnknownDevice";
 import {Display} from "./Display";
 import {summarizeError} from "../util";
 
+/**
+ * Outcome of a device LIST. A failure never carries a (possibly stale) device list, so a
+ * caller can't mistake an error for "these are all the devices" and prune accessories.
+ */
+export type ListDevicesResult =
+    | {ok: true, devices: Device[]}
+    | {ok: false, reason: 'error' | 'not-subscribed', status?: number};
+
 export class SmartDeviceManagement {
     private oauth2Client: google.Auth.OAuth2Client;
     private smartdevicemanagement: google.smartdevicemanagement_v1.Smartdevicemanagement;
@@ -95,10 +103,11 @@ export class SmartDeviceManagement {
         }
     }
 
-    async list_devices(): Promise<Device[] | undefined> {
+    async list_devices(): Promise<ListDevicesResult> {
 
+        // Permanent: the Pub/Sub setup failed in the constructor (already logged there).
         if (!this.subscribed)
-            return this.devices;
+            return {ok: false, reason: 'not-subscribed'};
 
         try {
             // Follow nextPageToken to fetch ALL devices. Without this we only ever see the first
@@ -133,10 +142,10 @@ export class SmartDeviceManagement {
                     }
                 })
                 .value();
+            return {ok: true, devices: this.devices};
         } catch (error: any) {
             this.log.error('Could not execute device LIST request: ' + summarizeError(error));
+            return {ok: false, reason: 'error', status: error?.response?.status};
         }
-
-        return this.devices;
     }
 }
